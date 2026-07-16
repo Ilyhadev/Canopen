@@ -40,8 +40,8 @@ public:
 
     explicit Node(const TransportApi& transport);
 
-    [[nodiscard]] int16_t init(uint32_t bitrate, uint8_t node_id);
-    [[nodiscard]] int16_t sendNmtStart();
+    [[nodiscard]] int16_t init(uint32_t bitrate);
+    [[nodiscard]] int16_t sendNmtStart(uint8_t node_id);
     [[nodiscard]] int16_t spinOnce(uint16_t expected_tpdo_id, uint8_t expected_dlc,
                                    uint8_t max_frames);
     [[nodiscard]] const Stats& stats() const;
@@ -51,7 +51,6 @@ private:
     TransportApi _transport;
     Stats _stats{};
     Frame _last_tpdo{};
-    uint8_t _node_id{0U};
     bool _initialized{false};
     bool _has_last_tpdo{false};
 };

@@ -13,26 +13,25 @@ bool isTransportValid(const TransportApi& transport) {
 
 Node::Node(const TransportApi& transport) : _transport(transport) {}
 
-int16_t Node::init(const uint32_t bitrate, const uint8_t node_id) {
-    if (!isTransportValid(_transport) || node_id < MIN_NODE_ID || node_id > MAX_NODE_ID) {
+int16_t Node::init(const uint32_t bitrate) {
+    if (!isTransportValid(_transport)) {
         return -1;
     }
     if (_transport.init(_transport.context, bitrate) < 0) {
         _stats.transport_errors++;
         return -1;
     }
-    _node_id = node_id;
     _initialized = true;
     return 0;
 }
 
-int16_t Node::sendNmtStart() {
-    if (!_initialized) {
+int16_t Node::sendNmtStart(const uint8_t node_id) {
+    if (!_initialized || node_id < MIN_NODE_ID || node_id > MAX_NODE_ID) {
         return -1;
     }
     const Frame frame{
         .id = 0x000U,
-        .data = {0x01U, _node_id},
+        .data = {0x01U, node_id},
         .data_len = 2U,
         .type = FrameType::DATA,
         .timestamp_us = _transport.get_time_us(_transport.context),

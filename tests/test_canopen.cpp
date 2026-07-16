@@ -39,9 +39,11 @@ int main() {
     FakeTransport fake{};
     const libcanopen::TransportApi api{&fake, init, send, receive, getTimeUs};
     libcanopen::Node node(api);
-    assert(node.init(250000U, 0U) < 0);
-    assert(node.init(250000U, 0x7FU) == 0);
-    assert(node.sendNmtStart() == 0);
+    assert(node.sendNmtStart(0x7FU) < 0);
+    assert(node.init(250000U) == 0);
+    assert(node.sendNmtStart(0U) < 0);
+    assert(node.sendNmtStart(128U) < 0);
+    assert(node.sendNmtStart(0x7FU) == 0);
     assert(fake.sent.id == 0U && fake.sent.data_len == 2U);
     assert(fake.sent.data[0] == 0x01U && fake.sent.data[1] == 0x7FU);
 

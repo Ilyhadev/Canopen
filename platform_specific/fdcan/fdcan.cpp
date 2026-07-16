@@ -2,24 +2,39 @@
 
 #include <string.h>
 
+#include "main.h"
+
+#ifndef DRONECAN_FDCAN_PRIMARY
+    #define DRONECAN_FDCAN_PRIMARY 1
+#endif
+
+#ifndef CANOPEN_FDCAN_PRIMARY
+    #define CANOPEN_FDCAN_PRIMARY 2
+#endif
+
+static_assert(DRONECAN_FDCAN_PRIMARY == 1 || DRONECAN_FDCAN_PRIMARY == 2,
+              "DRONECAN_FDCAN_PRIMARY must be 1 or 2");
+static_assert(CANOPEN_FDCAN_PRIMARY == 1 || CANOPEN_FDCAN_PRIMARY == 2,
+              "CANOPEN_FDCAN_PRIMARY must be 1 or 2");
+static_assert(DRONECAN_FDCAN_PRIMARY != CANOPEN_FDCAN_PRIMARY,
+              "DroneCAN and CANopen cannot own the same FDCAN controller");
+
+extern "C" FDCAN_HandleTypeDef hfdcan1;
+extern "C" FDCAN_HandleTypeDef hfdcan2;
+
 namespace {
 
-constexpr size_t MAX_INTERFACES = 2U;
-
-struct Interface {
-    FDCAN_HandleTypeDef* handle;
-    uint8_t interface_id;
-    uint32_t errors;
-};
-
 struct Context {
-    Interface interfaces[MAX_INTERFACES];
-    size_t count;
-    size_t next_receive;
+    FDCAN_HandleTypeDef* handle;
+    uint32_t errors;
     bool started;
 };
 
-Context context{};
+#if CANOPEN_FDCAN_PRIMARY == 1
+Context context{.handle = &hfdcan1};
+#else
+Context context{.handle = &hfdcan2};
+#endif
 
 HAL_StatusTypeDef sendFrame(FDCAN_HandleTypeDef* handle,
                             const FDCAN_TxHeaderTypeDef& header,
@@ -45,19 +60,17 @@ HAL_StatusTypeDef sendFrame(FDCAN_HandleTypeDef* handle,
 int16_t init(void* raw_context, uint32_t bitrate) {
     (void)bitrate;
     auto* ctx = static_cast<Context*>(raw_context);
-    if (ctx == nullptr || ctx->count == 0U || ctx->started) {
+    if (ctx == nullptr || ctx->handle == nullptr || ctx->started) {
         return -1;
     }
-    for (size_t idx = 0U; idx < ctx->count; idx++) {
-        if (HAL_FDCAN_ConfigGlobalFilter(ctx->interfaces[idx].handle,
-                                         FDCAN_ACCEPT_IN_RX_FIFO0,
-                                         FDCAN_REJECT,
-                                         FDCAN_REJECT_REMOTE,
-                                         FDCAN_REJECT_REMOTE) != HAL_OK ||
-            HAL_FDCAN_Start(ctx->interfaces[idx].handle) != HAL_OK) {
-            ctx->interfaces[idx].errors++;
-            return -1;
-        }
+    if (HAL_FDCAN_ConfigGlobalFilter(ctx->handle,
+                                     FDCAN_ACCEPT_IN_RX_FIFO0,
+                                     FDCAN_REJECT,
+                                     FDCAN_REJECT_REMOTE,
+                                     FDCAN_REJECT_REMOTE) != HAL_OK ||
+        HAL_FDCAN_Start(ctx->handle) != HAL_OK) {
+        ctx->errors++;
+        return -1;
     }
     ctx->started = true;
     return 0;
@@ -69,24 +82,21 @@ int16_t send(void* raw_context, const libcanopen::Frame& frame) {
         frame.type != libcanopen::FrameType::DATA) {
         return -1;
     }
-    bool sent = false;
-    for (size_t idx = 0U; idx < ctx->count; idx++) {
-        FDCAN_TxHeaderTypeDef header{};
-        header.Identifier = frame.id;
-        header.IdType = FDCAN_STANDARD_ID;
-        header.TxFrameType = FDCAN_DATA_FRAME;
-        header.DataLength = frame.data_len;
-        header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-        header.BitRateSwitch = FDCAN_BRS_OFF;
-        header.FDFormat = FDCAN_CLASSIC_CAN;
-        header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-        if (sendFrame(ctx->interfaces[idx].handle, header, frame.data) == HAL_OK) {
-            sent = true;
-        } else {
-            ctx->interfaces[idx].errors++;
-        }
+
+    FDCAN_TxHeaderTypeDef header{};
+    header.Identifier = frame.id;
+    header.IdType = FDCAN_STANDARD_ID;
+    header.TxFrameType = FDCAN_DATA_FRAME;
+    header.DataLength = frame.data_len;
+    header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    header.BitRateSwitch = FDCAN_BRS_OFF;
+    header.FDFormat = FDCAN_CLASSIC_CAN;
+    header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    if (sendFrame(ctx->handle, header, frame.data) != HAL_OK) {
+        ctx->errors++;
+        return -1;
     }
-    return sent ? 1 : -1;
+    return 1;
 }
 
 int16_t receive(void* raw_context, libcanopen::Frame& frame) {
@@ -94,36 +104,26 @@ int16_t receive(void* raw_context, libcanopen::Frame& frame) {
     if (ctx == nullptr || !ctx->started) {
         return -1;
     }
-    for (size_t attempt = 0U; attempt < ctx->count; attempt++) {
-        const size_t idx = (ctx->next_receive + attempt) % ctx->count;
-        FDCAN_RxHeaderTypeDef header{};
-        uint8_t data[8]{};
-        if (HAL_FDCAN_GetRxMessage(ctx->interfaces[idx].handle,
-                                   FDCAN_RX_FIFO0,
-                                   &header,
-                                   data) != HAL_OK) {
-            continue;
-        }
-        // STM32 HAL versions disagree on whether the received DLC is encoded
-        // in bits 16..19 or returned as a decoded value.
-        const uint8_t data_len = header.DataLength <= 0xFU
-                                     ? static_cast<uint8_t>(header.DataLength)
-                                     : static_cast<uint8_t>(header.DataLength >> 16U);
-        if (header.IdType != FDCAN_STANDARD_ID || header.RxFrameType != FDCAN_DATA_FRAME ||
-            header.FDFormat != FDCAN_CLASSIC_CAN || header.Identifier > 0x7FFU ||
-            data_len > sizeof(frame.data)) {
-            ctx->interfaces[idx].errors++;
-            continue;
-        }
-        frame.id = static_cast<uint16_t>(header.Identifier);
-        frame.data_len = data_len;
-        frame.type = libcanopen::FrameType::DATA;
-        frame.timestamp_us = static_cast<uint64_t>(HAL_GetTick()) * 1000ULL;
-        memcpy(frame.data, data, data_len);
-        ctx->next_receive = (idx + 1U) % ctx->count;
-        return 1;
+
+    FDCAN_RxHeaderTypeDef header{};
+    uint8_t data[8]{};
+    if (HAL_FDCAN_GetRxMessage(ctx->handle, FDCAN_RX_FIFO0, &header, data) != HAL_OK) {
+        return 0;
     }
-    return 0;
+    const uint8_t data_len = static_cast<uint8_t>(header.DataLength);
+    if (header.IdType != FDCAN_STANDARD_ID || header.RxFrameType != FDCAN_DATA_FRAME ||
+        header.FDFormat != FDCAN_CLASSIC_CAN || header.Identifier > 0x7FFU ||
+        data_len > sizeof(frame.data)) {
+        ctx->errors++;
+        return 0;
+    }
+
+    frame.id = static_cast<uint16_t>(header.Identifier);
+    frame.data_len = data_len;
+    frame.type = libcanopen::FrameType::DATA;
+    frame.timestamp_us = static_cast<uint64_t>(HAL_GetTick()) * 1000ULL;
+    memcpy(frame.data, data, data_len);
+    return 1;
 }
 
 uint64_t getTimeUs(void* raw_context) {
@@ -132,32 +132,6 @@ uint64_t getTimeUs(void* raw_context) {
 }
 
 }  // namespace
-
-int16_t canopenFdcanConfigure(const CanopenFdcanInterfaceConfig* interfaces,
-                              const size_t interface_count) {
-    if (context.started || interfaces == nullptr || interface_count == 0U ||
-        interface_count > MAX_INTERFACES) {
-        return -1;
-    }
-    for (size_t idx = 0U; idx < interface_count; idx++) {
-        if (interfaces[idx].handle == nullptr) {
-            return -1;
-        }
-        for (size_t other = 0U; other < idx; other++) {
-            if (interfaces[idx].handle == interfaces[other].handle ||
-                interfaces[idx].interface_id == interfaces[other].interface_id) {
-                return -1;
-            }
-        }
-    }
-    context = {};
-    context.count = interface_count;
-    for (size_t idx = 0U; idx < interface_count; idx++) {
-        context.interfaces[idx].handle = interfaces[idx].handle;
-        context.interfaces[idx].interface_id = interfaces[idx].interface_id;
-    }
-    return 0;
-}
 
 libcanopen::TransportApi canopenFdcanGetTransportApi() {
     return {
