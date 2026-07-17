@@ -25,13 +25,13 @@ int16_t Node::init(const uint32_t bitrate) {
     return 0;
 }
 
-int16_t Node::sendNmtStart(const uint8_t node_id) {
+int16_t Node::sendNmt(const uint8_t command, const uint8_t node_id) {
     if (!_initialized || node_id < MIN_NODE_ID || node_id > MAX_NODE_ID) {
         return -1;
     }
     const Frame frame{
         .id = 0x000U,
-        .data = {0x01U, node_id},
+        .data = {command, node_id},
         .data_len = 2U,
         .type = FrameType::DATA,
         .timestamp_us = _transport.get_time_us(_transport.context),
@@ -41,6 +41,22 @@ int16_t Node::sendNmtStart(const uint8_t node_id) {
         return -1;
     }
     return 0;
+}
+
+int16_t Node::sendNmtStart(const uint8_t node_id) {
+    return sendNmt(0x01U, node_id);
+}
+
+int16_t Node::sendNmtStop(const uint8_t node_id) {
+    return sendNmt(0x02U, node_id);
+}
+
+int16_t Node::sendNmtPreOperational(const uint8_t node_id) {
+    return sendNmt(0x80U, node_id);
+}
+
+int16_t Node::sendNmtReset(const uint8_t node_id) {
+    return sendNmt(0x81U, node_id);
 }
 
 int16_t Node::spinOnce(const uint16_t expected_tpdo_id,

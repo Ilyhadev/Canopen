@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(libcanopen VERSION 0.1.0 LANGUAGES CXX)
 
-add_library(libcanopen STATIC src/canopen.cpp)
+add_library(libcanopen STATIC src/canopen.cpp src/lss.cpp)
 add_library(libcanopen::libcanopen ALIAS libcanopen)
 target_include_directories(libcanopen PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_compile_features(libcanopen PUBLIC cxx_std_20)

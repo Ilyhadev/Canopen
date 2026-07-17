@@ -27,6 +27,8 @@ namespace {
 struct Context {
     FDCAN_HandleTypeDef* handle;
     uint32_t errors;
+    uint32_t last_tick_ms;
+    uint64_t monotonic_ms;
     bool started;
 };
 
@@ -99,6 +101,8 @@ int16_t send(void* raw_context, const libcanopen::Frame& frame) {
     return 1;
 }
 
+uint64_t getTimeUs(void* raw_context);
+
 int16_t receive(void* raw_context, libcanopen::Frame& frame) {
     auto* ctx = static_cast<Context*>(raw_context);
     if (ctx == nullptr || !ctx->started) {
@@ -121,14 +125,20 @@ int16_t receive(void* raw_context, libcanopen::Frame& frame) {
     frame.id = static_cast<uint16_t>(header.Identifier);
     frame.data_len = data_len;
     frame.type = libcanopen::FrameType::DATA;
-    frame.timestamp_us = static_cast<uint64_t>(HAL_GetTick()) * 1000ULL;
+    frame.timestamp_us = getTimeUs(ctx);
     memcpy(frame.data, data, data_len);
     return 1;
 }
 
 uint64_t getTimeUs(void* raw_context) {
-    (void)raw_context;
-    return static_cast<uint64_t>(HAL_GetTick()) * 1000ULL;
+    auto* const ctx = static_cast<Context*>(raw_context);
+    if (ctx == nullptr) {
+        return 0U;
+    }
+    const uint32_t now_ms = HAL_GetTick();
+    ctx->monotonic_ms += static_cast<uint32_t>(now_ms - ctx->last_tick_ms);
+    ctx->last_tick_ms = now_ms;
+    return ctx->monotonic_ms * 1000ULL;
 }
 
 }  // namespace
