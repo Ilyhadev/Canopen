@@ -5,7 +5,6 @@
 
 namespace libcanopen {
 
-inline constexpr uint8_t MIN_NODE_ID = 1U;
 inline constexpr uint8_t MAX_NODE_ID = 127U;
 
 enum class FrameType : uint8_t {

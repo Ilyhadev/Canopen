@@ -26,7 +26,7 @@ int16_t Node::init(const uint32_t bitrate) {
 }
 
 int16_t Node::sendNmt(const uint8_t command, const uint8_t node_id) {
-    if (!_initialized || node_id < MIN_NODE_ID || node_id > MAX_NODE_ID) {
+    if (!_initialized || node_id > MAX_NODE_ID) {
         return -1;
     }
     const Frame frame{
